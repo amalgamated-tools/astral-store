@@ -2,106 +2,153 @@ package main
 
 import (
 	"fmt"
-	"net/http"
+	"io"
 	"os"
-	"sort"
-	"text/template"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
+	stdlog "log"
+
+	"github.com/amalgamated-tools/astral-store/config"
+	"github.com/amalgamated-tools/astral-store/web"
+	"github.com/getsentry/sentry-go"
 	"github.com/hashicorp/go-hclog"
-	"github.com/julienschmidt/httprouter"
-	"github.com/markbates/goth"
-	"github.com/markbates/goth/gothic"
-	"github.com/markbates/goth/providers/google"
-	"github.com/urfave/negroni"
+	"github.com/hashicorp/go-service/debug"
 )
 
-var log hclog.Logger
+// GitCommit is used as the application version string, set by LD flags.
+var GitCommit string
 
-func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	m := make(map[string]string)
-	m["google"] = "Google"
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	providerIndex := &ProviderIndex{Providers: keys, ProvidersMap: m}
-	t, _ := template.New("foo").Parse(indexTemplate)
-	t.Execute(w, providerIndex)
-}
-
-func Auth(res http.ResponseWriter, req *http.Request, p httprouter.Params) {
-	gothic.GetProviderName = func(req *http.Request) (string, error) {
-		return p.ByName("provider"), nil
-	}
-	if gothUser, err := gothic.CompleteUserAuth(res, req); err == nil {
-		t, _ := template.New("foo").Parse(userTemplate)
-		t.Execute(res, gothUser)
-	} else {
-		gothic.BeginAuthHandler(res, req)
-	}
-}
-
-func Callback(res http.ResponseWriter, req *http.Request, p httprouter.Params) {
-	user, err := gothic.CompleteUserAuth(res, req)
-	if err != nil {
-		fmt.Fprintln(res, err)
-		return
-	}
-	t, _ := template.New("foo").Parse(userTemplate)
-	t.Execute(res, user)
-}
-
-var indexTemplate = `{{range $key,$value:=.Providers}}
-    <p><a href="/auth/{{$value}}">Log in with {{index $.ProvidersMap $value}}</a></p>
-{{end}}`
+// log is a structured hclog logger used as the default package logger.
+var log hclog.InterceptLogger
 
 func main() {
+	os.Exit(realMain(os.Args, os.Stdout, os.Stderr))
+}
 
-	goth.UseProviders(
-		google.New(os.Getenv("GOOGLE_KEY"), os.Getenv("GOOGLE_SECRET"), "http://localhost:8080/auth/google/callback"),
-	)
-
-	println("Starting")
-	router := httprouter.New()
-	router.GET("/", Index)
-	router.GET("/auth/:provider", Auth)
-	router.GET("/auth/:provider/callback", Callback)
-
-	n := negroni.Classic() // Includes some default middlewares
-
-	recovery := negroni.NewRecovery()
-	recovery.Formatter = &negroni.HTMLPanicFormatter{}
-	n.Use(recovery)
-	n.UseHandler(router)
-
-	s := &http.Server{
-		Addr:           ":8080",
-		Handler:        n,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		MaxHeaderBytes: 1 << 20,
+func setupSentry(cfg *config.Config) {
+	// Add gitcommit to release
+	opts := sentry.ClientOptions{
+		Debug:       true,
+		DebugWriter: os.Stderr,
+		Release:     GitCommit,
+		Environment: os.Getenv("SENTRY_ENV"),
+		BeforeSend: func(event *sentry.Event, hint *sentry.EventHint) *sentry.Event {
+			log.Debug(
+				"Sending event to Sentry",
+				"eventID",
+				event.EventID,
+				"message",
+				event.Message,
+				"exceptionValue",
+				event.Exception[0].Value,
+			)
+			return event
+		},
 	}
-	s.ListenAndServe()
+	// this sets up the global sentry
+	sentryErr := sentry.Init(opts)
+	if sentryErr != nil {
+		panic(sentryErr)
+	}
+
+	defer sentry.Flush(2 * time.Second)
 }
 
-type ProviderIndex struct {
-	Providers    []string
-	ProvidersMap map[string]string
+// setupLogging allows for reconfiguration of the logger.
+func setupLogging(cfg *config.Config) {
+	log = hclog.NewInterceptLogger(&hclog.LoggerOptions{
+		Name:       "astral-store",
+		Level:      hclog.LevelFromString(string(cfg.Server.LogLevel)),
+		JSONFormat: cfg.Server.LogFormat == config.LogFormatJSON,
+	})
+	hclog.SetDefault(log)
+
+	// Plumb up the standard logger to the hclog logger, using InferLevels to
+	// map (eg) '[DEBUG] foo' to the debug level. The standard logger should
+	// not be used, but this makes sure that the logs of any dependencies that
+	// use the standard logger directly are also handled by the hclog logger.
+	opts := &hclog.StandardLoggerOptions{InferLevels: true}
+	stdlog.SetOutput(log.Named("stdlog").StandardWriter(opts))
+	stdlog.SetPrefix("")
+	stdlog.SetFlags(0)
 }
 
-var userTemplate = `
-<p><a href="/logout/{{.Provider}}">logout</a></p>
-<p>Name: {{.Name}} [{{.LastName}}, {{.FirstName}}]</p>
-<p>Email: {{.Email}}</p>
-<p>NickName: {{.NickName}}</p>
-<p>Location: {{.Location}}</p>
-<p>AvatarURL: {{.AvatarURL}} <img src="{{.AvatarURL}}"></p>
-<p>Description: {{.Description}}</p>
-<p>UserID: {{.UserID}}</p>
-<p>AccessToken: {{.AccessToken}}</p>
-<p>ExpiresAt: {{.ExpiresAt}}</p>
-<p>RefreshToken: {{.RefreshToken}}</p>
-`
+func realMain(args []string, stdout, stderr io.Writer) int {
+	// return handleSignals(web)
+	setupLogging(config.Default())
+	// Ensure we have a config path. (go run main.go local.json or tf-vcs local.json)
+	if len(args) != 2 {
+		fmt.Fprintln(stderr, usage())
+		return 1
+	}
+
+	// Parse the config file.
+	cfg, err := config.Parse(args[1])
+	if err != nil {
+		log.Error("Failed to parse config", "error", err)
+		sentry.CaptureException(err)
+		return 1
+	}
+
+	// Reconfigure the logger using the given config.
+	setupLogging(cfg)
+	log.Debug("Configuration", "config", cfg)
+
+	setupSentry(cfg)
+
+	webApp, err := web.New(cfg, log)
+	if err != nil {
+		log.Error("Failed creating web", "error", err)
+		sentry.CaptureException(err)
+		return 1
+	}
+	// Start the vcwebs service.
+	if err := webApp.Start(); err != nil {
+		log.Error("Failed to start the web service", "error", err)
+		sentry.CaptureException(err)
+		return 1
+	}
+
+	return handleSignals(webApp)
+
+}
+
+func handleSignals(web *web.Web) int {
+	// Dump stack on SIGUSR1.
+	debug.SignalStackDump(syscall.SIGUSR1)
+
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+
+	s := <-signalCh
+	log.Info("Received signal, shutting down", "signal", s)
+
+	// Begin graceful shutdown.
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		err := web.Shutdown()
+		if err != nil {
+			log.Error("svc.Shutdown returned errors", err)
+		}
+	}()
+
+	select {
+	case <-doneCh:
+		log.Info("Graceful shutdown complete")
+		return 0
+	case s := <-signalCh:
+		log.Error("Graceful shutdown aborted!", "signal", s)
+		return 1
+	}
+}
+
+// usage returns the CLI usage string.
+func usage() string {
+	return strings.TrimSpace(`
+usage: astral-store <config file>
+`)
+}
