@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -26,7 +25,7 @@ type Web struct {
 
 // New returns an initialized web.
 func New(config *config.Config, log hclog.InterceptLogger) (web *Web, err error) {
-	log = log.ResetNamed("api").(hclog.InterceptLogger)
+	log = log.ResetNamed("web").(hclog.InterceptLogger)
 	web = &Web{
 		log:    log,
 		config: config,
@@ -35,7 +34,7 @@ func New(config *config.Config, log hclog.InterceptLogger) (web *Web, err error)
 	// setup http server
 	web.server = &http.Server{
 		Addr:           config.Server.Address,
-		Handler:        web.setupRoutes(),
+		Handler:        web.setupHandler(),
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 1 << 20,
@@ -47,8 +46,7 @@ func New(config *config.Config, log hclog.InterceptLogger) (web *Web, err error)
 func (web *Web) Index(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	session, _ := store.Get(req, "session-name")
 	for k, v := range session.Values {
-		fmt.Printf("k: %v\n", k)
-		fmt.Printf("v: %v\n", v)
+		web.log.Debug("Session details", "key", k, "value", v)
 	}
 	// Set some session values.
 	session.Values["foo"] = "bar"
@@ -60,42 +58,50 @@ func (web *Web) Index(w http.ResponseWriter, req *http.Request, _ httprouter.Par
 		return
 	}
 }
-func (web *Web) setupRoutes() *negroni.Negroni {
-	router := httprouter.New()
-	router.GET("/", web.Index)
 
-	n := negroni.Classic() // Includes some default middlewares
+func (web *Web) setupHandler() *negroni.Negroni {
+	n := negroni.Classic()
+
 	recovery := negroni.NewRecovery()
 	recovery.Formatter = &negroni.HTMLPanicFormatter{}
-	n.Use(sentrynegroni.New(sentrynegroni.Options{
+	n.Use(recovery)
+
+	sentry := sentrynegroni.New(sentrynegroni.Options{
 		Repanic:         true,
 		WaitForDelivery: false,
-	}))
-	n.Use(recovery)
-	n.UseHandler(router)
+	})
+	n.Use(sentry)
+
+	n.UseHandler(web.setupRoutes())
 
 	return n
 }
 
-func (a *Web) Start() error {
-	a.log.Debug("Starting Web HTTP Server", "address", a.server.Addr)
+func (web *Web) setupRoutes() *httprouter.Router {
+	router := httprouter.New()
+	router.GET("/", web.Index)
+	return router
+}
+
+func (web *Web) Start() error {
+	web.log.Debug("Starting Web HTTP Server on", "address", web.server.Addr)
 
 	// Start HTTP server
-	if err := a.server.ListenAndServe(); err != http.ErrServerClosed {
+	if err := web.server.ListenAndServe(); err != http.ErrServerClosed {
 		// Error starting or closing listener.
-		a.log.Error("Starting Web Server and received an error", "error", err)
+		web.log.Error("Starting Web Server and received an error", "error", err)
 		return err
 	}
-	a.log.Debug("Started Web HTTP Server", "address", a.server.Addr)
+	web.log.Debug("Started Web HTTP Server", "address", web.server.Addr)
 	return nil
 }
 
-func (a *Web) Shutdown() error {
-	a.log.Debug("Gracefully shutting down the Web")
+func (web *Web) Shutdown() error {
+	web.log.Debug("Gracefully shutting down the Web")
 
 	var errs *multierror.Error
 
-	if err := a.server.Shutdown(context.Background()); err != nil {
+	if err := web.server.Shutdown(context.Background()); err != nil {
 		errs = multierror.Append(errs, err)
 	}
 

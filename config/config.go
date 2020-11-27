@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-// GitCommit is used as the application version string, set by LD flags.
+// GitCommit is used as the application version string
 var GitCommit string
 
 // LogLevelType represents a log level.
@@ -52,7 +52,7 @@ type Server struct {
 func Default() *Config {
 	return &Config{
 		Server: &Server{
-			Address:   "0.0.0.0:7677",
+			Address:   "0.0.0.0:8080",
 			LogLevel:  LogLevelDebug,
 			LogFormat: LogFormatText,
 		},

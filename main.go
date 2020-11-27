@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -77,20 +76,18 @@ func setupLogging(cfg *config.Config) {
 }
 
 func realMain(args []string, stdout, stderr io.Writer) int {
-	// return handleSignals(web)
-	setupLogging(config.Default())
-	// Ensure we have a config path. (go run main.go local.json or tf-vcs local.json)
-	if len(args) != 2 {
-		fmt.Fprintln(stderr, usage())
-		return 1
-	}
+	cfg := config.Default()
+	setupLogging(cfg)
 
-	// Parse the config file.
-	cfg, err := config.Parse(args[1])
-	if err != nil {
-		log.Error("Failed to parse config", "error", err)
-		sentry.CaptureException(err)
-		return 1
+	if len(args) == 2 {
+		// Parse the config file.
+		var err error
+		cfg, err = config.Parse(args[1])
+		if err != nil {
+			log.Error("Failed to parse config", "error", err)
+			sentry.CaptureException(err)
+			return 1
+		}
 	}
 
 	// Reconfigure the logger using the given config.
