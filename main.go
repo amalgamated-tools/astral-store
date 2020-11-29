@@ -96,7 +96,6 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 	setupSentry(cfg)
 
 	apiApp, err := api.New(cfg, log)
-
 	if err != nil {
 		log.Error("Failed creating api", "error", err)
 		sentry.CaptureException(err)

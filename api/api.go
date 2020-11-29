@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/amalgamated-tools/astral-store/config"
+	"github.com/amalgamated-tools/astral-store/models"
 	sentrynegroni "github.com/getsentry/sentry-go/negroni"
 	"github.com/gorilla/sessions"
 	"github.com/hashicorp/go-hclog"
@@ -16,6 +17,7 @@ import (
 )
 
 type Api struct {
+	users       *models.UserManager
 	config      *config.Config
 	server      *http.Server
 	log         hclog.InterceptLogger
@@ -25,7 +27,10 @@ type Api struct {
 // New returns an initialized web.
 func New(config *config.Config, log hclog.InterceptLogger) (api *Api, err error) {
 	log = log.ResetNamed("web").(hclog.InterceptLogger)
+	db := models.NewSqliteDB("data.db")
+	usermgr, _ := models.NewUserManager(db)
 	api = &Api{
+		users:       usermgr,
 		log:         log,
 		config:      config,
 		cookieStore: sessions.NewCookieStore([]byte(os.Getenv("SESSION_SECRET"))),
