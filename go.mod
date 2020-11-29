@@ -9,10 +9,9 @@ require (
 	github.com/gorilla/sessions v1.2.1
 	github.com/hashicorp/go-hclog v0.15.0
 	github.com/hashicorp/go-multierror v1.1.0
-	github.com/hashicorp/go-uuid v1.0.2 // indirect
+	github.com/hashicorp/go-uuid v1.0.2
 	github.com/jinzhu/gorm v1.9.16
 	github.com/julienschmidt/httprouter v1.3.0
-	github.com/satori/go.uuid v1.2.0
 	github.com/urfave/negroni v1.0.0
-	golang.org/x/crypto v0.0.0-20191227163750-53104e6ec876
+	golang.org/x/crypto v0.0.0-20201124201722-c8d3bf9c5392
 )
