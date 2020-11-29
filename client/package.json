@@ -1,8 +1,8 @@
 {
-  "name": "starter",
+  "name": "astral-client",
   "version": "1.0.0",
-  "description": "Go/Vue starter project",
-  "author": "Mark Chenoweth",
+  "description": "",
+  "author": "",
   "private": true,
   "scripts": {
     "dev": "node build/dev-server.js",

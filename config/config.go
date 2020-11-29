@@ -52,7 +52,7 @@ type Server struct {
 func Default() *Config {
 	return &Config{
 		Server: &Server{
-			Address:   "0.0.0.0:8080",
+			Address:   "0.0.0.0:3000",
 			LogLevel:  LogLevelDebug,
 			LogFormat: LogFormatText,
 		},
