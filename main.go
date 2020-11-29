@@ -10,11 +10,10 @@ import (
 
 	stdlog "log"
 
+	"github.com/amalgamated-tools/astral-store/api"
 	"github.com/amalgamated-tools/astral-store/config"
-	"github.com/amalgamated-tools/astral-store/web"
 	"github.com/getsentry/sentry-go"
 	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-service/debug"
 )
 
 // GitCommit is used as the application version string, set by LD flags.
@@ -96,27 +95,24 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 
 	setupSentry(cfg)
 
-	webApp, err := web.New(cfg, log)
+	apiApp, err := api.New(cfg, log)
+
 	if err != nil {
-		log.Error("Failed creating web", "error", err)
+		log.Error("Failed creating api", "error", err)
 		sentry.CaptureException(err)
 		return 1
 	}
-	// Start the vcwebs service.
-	if err := webApp.Start(); err != nil {
-		log.Error("Failed to start the web service", "error", err)
+	// Start the api service.
+	if err := apiApp.Start(); err != nil {
+		log.Error("Failed to start the api service", "error", err)
 		sentry.CaptureException(err)
 		return 1
 	}
 
-	return handleSignals(webApp)
-
+	return handleSignals(apiApp)
 }
 
-func handleSignals(web *web.Web) int {
-	// Dump stack on SIGUSR1.
-	debug.SignalStackDump(syscall.SIGUSR1)
-
+func handleSignals(api *api.Api) int {
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 
@@ -127,7 +123,7 @@ func handleSignals(web *web.Web) int {
 	doneCh := make(chan struct{})
 	go func() {
 		defer close(doneCh)
-		err := web.Shutdown()
+		err := api.Shutdown()
 		if err != nil {
 			log.Error("svc.Shutdown returned errors", err)
 		}
